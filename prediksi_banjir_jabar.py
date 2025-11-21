@@ -16,7 +16,7 @@ import pickle
 # ===============================================================
 st.title("🌧️ Prediksi Jumlah Kejadian Banjir - Provinsi Jawa Barat")
 
-data_path = "bpbd-od_17600_jml_kejadian_bencana_banjir__kabupatenkota_v.csv"
+data_path = "bpbd-od_17600_jml_kejadian_bencana_banjir__kabupatenkota_v3_data.csv"
 
 df = pd.read_csv(data_path)
 
