@@ -52,7 +52,7 @@
 # pip install pandas numpy matplotlib seaborn scikit-learn joblib streamlit
 
 # ============================================================
-# Exploratory Data Abalysis (akan ditampilkan di Streamlit)
+# Exploratory Data Abalasis (akan ditampilkan di Streamlit)
 # - 2 line plot
 # - 2 box plot
 # - 2 pie chart
@@ -111,7 +111,6 @@ def load_dataframe(file_obj):
 
 def basic_cleaning(df):
     # keep necessary columns; if absent, raise
-    needed = ["nama_kabupaten_kota", "jumlah_banjir", "tahun", "kode_kabupaten_kota"]
     for col in ["nama_kabupaten_kota", "jumlah_banjir", "tahun"]:
         if col not in df.columns:
             raise ValueError(f"Kolom '{col}' tidak ditemukan di dataset. Pastikan format CSV benar.")
@@ -124,6 +123,8 @@ def basic_cleaning(df):
     else:
         # create fallback kode (based on label encoding)
         df["kode_kabupaten_kota"] = df["nama_kabupaten_kota"].astype("category").cat.codes + 1000
+    # drop rows with NaN year
+    df = df[df["tahun"].notna()]
     return df
 
 def prepare_features(df):
@@ -167,6 +168,7 @@ def prepare_input_row_for_predict(nama_kab, tahun, feature_cols, df_ohe_cols, ko
         # try to find matching ohe col ignoring case/spaces
         found = None
         for c in df_ohe_cols:
+            # match end of col name with kabupaten name (case-insensitive)
             if c.lower().endswith(nama_kab.lower()):
                 found = c
                 break
@@ -210,6 +212,9 @@ try:
 except Exception as e:
     st.error(f"Masalah pada format dataset: {e}")
     st.stop()
+
+# compute max_year for later validation
+max_year = int(df["tahun"].max())
 
 st.subheader("📋 Preview Dataset")
 st.dataframe(df.head(8))
@@ -430,39 +435,43 @@ if "trained_model" in st.session_state:
 # Deployment
 # ============================================================
 st.subheader("🚀 Deployment - Simulasi & Prediksi (UI)")
+st.write("Prediksi sekarang hanya menerima input tahun **masa depan** (lebih besar dari tahun maksimum dataset).")
 
-st.write("Gunakan dropdown di bawah untuk mensimulasikan prediksi pada kabupaten/kota dan tahun pilihan.")
+# Informasi tahun maksimum (prevent backward prediction)
+st.info(f"Tahun maksimum dalam dataset: **{max_year}** — Prediksi dibatasi untuk tahun > {max_year}.")
 
-# Dropdown untuk kabupaten dan tahun
-kab_list = sorted(df["nama_kabupaten_kota"].unique().tolist())
-selected_kab = st.selectbox("Pilih Kabupaten/Kota untuk Prediksi", kab_list)
+if "trained_model" in st.session_state:
+    kab_list = sorted(df["nama_kabupaten_kota"].unique().tolist())
+    selected_kab = st.selectbox("Pilih Kabupaten/Kota untuk Prediksi", kab_list)
 
-years_list = sorted(df["tahun"].unique().tolist())
-# allow user to pick year from range (incl. future)
-min_y, max_y = int(min(years_list)), int(max(years_list))
-year_options = list(range(min_y, max_y+6))  # allow up to +5 tahun ke depan
-selected_year = st.selectbox("Pilih Tahun Prediksi", year_options, index=len(years_list)-1 if len(years_list)>0 else 0)
+    # Ganti dropdown tahun dengan number_input yang memaksa tahun masa depan
+    selected_year = st.number_input(
+        f"Masukkan Tahun Prediksi (harus > {max_year})",
+        min_value=max_year + 1,
+        max_value=2100,
+        value=max_year + 1,
+        step=1
+    )
 
-if st.button("🔮 Lakukan Prediksi (gunakan model terlatih/termuat)"):
-    if "trained_model" not in st.session_state:
-        st.error("Model belum dilatih atau tidak ditemukan. Silakan tekan 'Latih Model' atau letakkan file model_prediksi_banjir_rf_jabar.pkl di folder.")
-    else:
+    if st.button("🔮 Lakukan Prediksi (gunakan model terlatih/termuat)"):
         try:
+            # double-check model present
             rf_model = st.session_state["trained_model"]
             scaler_obj = st.session_state["scaler_obj"]
             feature_cols = st.session_state["feature_cols"]
             ohe_cols = st.session_state["ohe_cols"]
             kode_map = st.session_state["kode_map"]
 
+            # prepare input (will be scaled inside)
             X_input_scaled = prepare_input_row_for_predict(selected_kab, selected_year, feature_cols, ohe_cols, kode_map, scaler_obj)
             pred_val = rf_model.predict(X_input_scaled)[0]
             st.success(f"Hasil prediksi jumlah kejadian banjir di **{selected_kab}** pada tahun **{selected_year}**: **{pred_val:.0f} kejadian**")
 
-            # Tampilkan grafik historis kabupaten
+            # Tampilkan grafik historis kabupaten + titik prediksi (prediksi berada di masa depan)
             df_kab = df[df["nama_kabupaten_kota"] == selected_kab].groupby("tahun")["jumlah_banjir"].sum().reset_index()
             fig_hist, ax = plt.subplots(figsize=(8,3))
             ax.plot(df_kab["tahun"], df_kab["jumlah_banjir"], marker="o", label="historis")
-            ax.scatter([selected_year], [pred_val], color="red", label="prediksi")
+            ax.scatter([selected_year], [pred_val], label="prediksi (future)", zorder=5)
             ax.set_title(f"Tren Historis & Prediksi - {selected_kab}")
             ax.set_xlabel("Tahun")
             ax.set_ylabel("Jumlah Kejadian")
@@ -472,6 +481,8 @@ if st.button("🔮 Lakukan Prediksi (gunakan model terlatih/termuat)"):
 
         except Exception as e:
             st.error(f"Gagal melakukan prediksi: {e}")
+else:
+    st.warning("Model belum dilatih atau dimuat. Tekan 'Latih Model' atau muat model lokal.")
 
 # Save model button (manual)
 if st.button("💾 Simpan Model Saat Ini ke .pkl"):
@@ -484,10 +495,10 @@ if st.button("💾 Simpan Model Saat Ini ke .pkl"):
         st.error("Model belum tersedia untuk disimpan.")
 
 # ============================================================
-# Model Simulation
+# Model Simulation (Batch)
 # ============================================================
 st.subheader("🧪 Contoh Simulasi (Batch) - Upload CSV kecil berisi kabupaten & tahun (opsional)")
-st.write("Format contoh CSV: `nama_kabupaten_kota,tahun` per baris. Hasil akan berisi kolom prediksi.")
+st.write("Format contoh CSV: `nama_kabupaten_kota,tahun` per baris. Tahun harus lebih besar dari tahun maksimum dataset.")
 
 sim_file = st.file_uploader("Upload CSV simulasi (opsional)", type=["csv"], key="simfile")
 if sim_file is not None and "trained_model" in st.session_state:
@@ -499,9 +510,21 @@ if sim_file is not None and "trained_model" in st.session_state:
             rows = []
             for _, r in df_sim.iterrows():
                 try:
-                    Xs = prepare_input_row_for_predict(r["nama_kabupaten_kota"], int(r["tahun"]), st.session_state["feature_cols"], st.session_state["ohe_cols"], st.session_state["kode_map"], st.session_state["scaler_obj"])
+                    tahun_input = int(r["tahun"])
+                    nama_input = r["nama_kabupaten_kota"]
+                    if tahun_input <= max_year:
+                        # Reject backward-year entries in batch; report error per row
+                        rows.append({
+                            "nama_kabupaten_kota": nama_input,
+                            "tahun": tahun_input,
+                            "prediksi_jumlah_banjir": None,
+                            "error": f"Tahun harus > {max_year}. (ditolak)"
+                        })
+                        continue
+
+                    Xs = prepare_input_row_for_predict(nama_input, tahun_input, st.session_state["feature_cols"], st.session_state["ohe_cols"], st.session_state["kode_map"], st.session_state["scaler_obj"])
                     p = st.session_state["trained_model"].predict(Xs)[0]
-                    rows.append({"nama_kabupaten_kota": r["nama_kabupaten_kota"], "tahun": int(r["tahun"]), "prediksi_jumlah_banjir": int(round(p))})
+                    rows.append({"nama_kabupaten_kota": nama_input, "tahun": tahun_input, "prediksi_jumlah_banjir": int(round(p))})
                 except Exception as ie:
                     rows.append({"nama_kabupaten_kota": r.get("nama_kabupaten_kota"), "tahun": r.get("tahun"), "prediksi_jumlah_banjir": None, "error": str(ie)})
             df_out = pd.DataFrame(rows)
